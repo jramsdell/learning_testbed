@@ -2,12 +2,11 @@ import random
 from collections import Counter
 
 class Shell(object):
-    def __init__(self, weight, min_energy, max_energy):
+    def __init__(self, weight, chance):
         self.nodes = []
         self.node_indices = {}
         self.weight = weight
-        self.min_energy = min_energy
-        self.max_energy = max_energy
+        self.chance = chance
         self.cumulative = 0
         self.above = None
         self.below = None
@@ -44,7 +43,8 @@ class Shell(object):
     #         shells[node.level].nodes.append(node)
 
     def update_node(self, node, is_reward):
-        success = random.random() <= 1 / self.weight
+        # success = random.random() <= 1 / self.weight
+        success = random.random() <= self.chance
         neighbor = [self.below, self.above][is_reward]
 
         if success and neighbor:
@@ -77,6 +77,7 @@ class ParamDist(object):
         self.param_value = param_value
         self.visited = 0
         self.visited_by = Counter()
+        self.rewarded_by = Counter()
         if points and shell_size:
             center_shell = self.shells[shell_size]
             for idx, point in enumerate(points):
@@ -92,7 +93,11 @@ class ParamDist(object):
             if not shell.nodes:
                 continue
             if is_inverse:
-                total += 1 / shell.value()
+                v = shell.value()
+                if v > 1:
+                    v = 1/v
+                # total += 1 / shell.value()
+                total += v
             else:
                 total += shell.value()
             shell.cumulative = total
@@ -121,32 +126,38 @@ class ParamDist(object):
 
     def percolate(self):
         if random.random() <= self.percolation:
-            dest = [self.prev, self.next][random.randint(0,1)]
-            if dest:
-                return dest.percolate()
+            if random.random() >= 0.5:
+                dest = self.prev or self.next or self
+            else:
+                dest = self.next or self.prev or self
 
+            return dest.percolate()
         return self
 
 
     def construct_shells(self, steps):
         # energy_step = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-        energy_step = [(2 ** (x + 1)) for x in range(steps)]
+        # energy_step = [(2 ** (x + 1)) for x in range(steps)]
+        energy_step = [(2 * (x + 1)) for x in range(steps)]
         for idx, i in enumerate(energy_step[::-1]):
             # weight = 1/(idx * 4 + 2)
             # weight = 1/i**3
+            # weight = 1/i
+            # weight = 1/(idx + 1)
             weight = 1/i
-            min_energy = -i
-            max_energy = -(int(i/2))
-            self.shells.append(Shell(weight, min_energy, max_energy))
+            chance = 1/i
+            self.shells.append(Shell(weight, chance))
 
-        self.shells.append(Shell(1, 0, 0))
+        self.shells.append(Shell(1, 0.5))
 
         for idx,i in enumerate(energy_step):
             # weight = idx * 4 + 1
+            # weight = i + 1
+            # weight = (idx + 1) * 2
             weight = i + 1
-            min_energy = int(i/2)
-            max_energy = i
-            self.shells.append(Shell(weight, min_energy, max_energy))
+            # chance = i + 1
+            chance = 1/i
+            self.shells.append(Shell(weight, chance))
 
         prev = None
         for shell in self.shells:

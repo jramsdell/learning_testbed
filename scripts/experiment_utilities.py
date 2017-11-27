@@ -3,6 +3,7 @@ from param_dist import ParamDist
 import random
 from data_readers import ConfigReader, write_pgm
 from sklearn.neighbors import KDTree
+run_counter = 0
 
 class PointSampler(object):
     def __init__(self, pdf):
@@ -31,7 +32,35 @@ class PointSampler(object):
         Creates a KD Tree (used for checking distance to points) from samples.
         """
         samples = self.sample(ntimes)
+        self.write_pgm_samples(samples, "samples_used.pgm")
         self.tree = KDTree(samples)
+
+    def write_sample_data(self, samples, filename):
+        with open(filename, "w") as f:
+            for sample in samples:
+                f.write("{} {}\n".format(*sample))
+
+
+    def load_sample_data(self, filename):
+        samples = []
+        with open(filename) as f:
+            for line in f:
+                x,y = line.split()
+                samples.append((int(x), int(y)))
+        return samples
+
+
+    def write_pgm_samples(self, samples, filename):
+        values = np.zeros((self.height, self.width), dtype=np.uint8)
+        for sample in samples:
+            values[sample[1]][sample[0]] = 255
+
+        with open(filename, "w") as f:
+            f.write("P2\n{} {}\n255\n".format(self.width, self.height))
+            for i in np.nditer(values):
+                f.write("{}\n".format(i))
+
+
 
     def query(self, point, radius):
         """
@@ -110,6 +139,8 @@ class StatisticalManifold(object):
     def do_rollout(self, is_inverse=False):
         self.rollout = []
         self.top_layer.do_rollout(self.rollout, is_inverse)
+        global run_counter
+        run_counter += 1
 
     def get_parameters(self, rollout):
         params = {}
@@ -118,15 +149,73 @@ class StatisticalManifold(object):
                 point.param_value + random.uniform(-point.radius, point.radius)
         return params
 
+
+    def choose_reward(self, visited_by):
+        total = 0
+        best = {}
+        for k,v in visited_by.items():
+            total += v
+            best[k] = total
+
+        pick = random.uniform(0, total)
+        for k,v in visited_by.items():
+            if pick <= best[k]:
+                return k
+
+
+
+
+
     def do_backup(self, is_inverse=False):
         params = self.get_parameters(self.rollout)
         is_reward = self.indicator(params)
-        if is_inverse:
-            is_reward = not is_reward
+        # if is_inverse:
+        #     is_reward = not is_reward
 
         for parent, point in self.rollout:
+            success = True
+            if is_reward:
+                global run_counter
+                point.rewarded_by[parent] += 1
+                # reward_chance = sum(point.rewarded_by.values()) / point.visited
+                best = self.choose_reward(point.visited_by)
+                shell = best.point_indices[point]
+                best.point_indices[point] = shell.update_node(point, is_reward)
+                best = self.choose_reward(point.visited_by)
+                shell = best.point_indices[point]
+                best.point_indices[point] = shell.update_node(point, is_reward)
+                best = self.choose_reward(point.visited_by)
+                shell = best.point_indices[point]
+                best.point_indices[point] = shell.update_node(point, is_reward)
+
+
+            if not success:
+                continue
             shell = parent.point_indices[point]
             parent.point_indices[point] = shell.update_node(point, is_reward)
+            # ugly... ignore for now
+            if point.param_name == "Y":
+                for p in [parent.next, parent.prev]:
+
+                    if p:
+                        shell = p.point_indices[point]
+                        p.point_indices[point] = shell.update_node(point, is_reward)
+
+                        for p2 in [p.next, p.prev]:
+                            if p2:
+                                shell = p2.point_indices[point]
+                                p2.point_indices[point] = shell.update_node(point, is_reward)
+                                for p3 in [p2.next, p2.prev]:
+                                    if p3:
+                                        shell = p3.point_indices[point]
+                                        p3.point_indices[point] = shell.update_node(point, is_reward)
+
+                                        for p4 in [p3.next, p3.prev]:
+                                            if p4:
+                                                shell = p4.point_indices[point]
+                                                p4.point_indices[point] = shell.update_node(point, is_reward)
+
+
 
     def train(self, ntimes):
         for i in range(ntimes):
@@ -164,7 +253,7 @@ class StatisticalManifold(object):
             except IndexError:
                 continue
 
-        values = values / values.sum()
+        # values = values / values.sum()
         return values
 
 
@@ -192,8 +281,10 @@ class ExperimentRunner(object):
         values = self.pdf_manifold.estimate_frequencies(
             50000, height, width)
 
-        values = values / values.max()
-        values = (values * 255).astype(np.uint8)
+        # values = values / values.max()
+        # self.sampler.write_pdf("test_pdf.pgm")
+        values *= 30
+        # values = (values * 255).astype(np.uint8)
         write_pgm("manifold_estimate.pgm", values)
 
     def initialize_pdf_manifold(self):
@@ -213,6 +304,12 @@ class ExperimentRunner(object):
 
         self.pdf_manifold.add_layer(
             "X", xs, radius=point_radius, percolation=percolation)
+
+        # origin = self.pdf_manifold.layers[1][0]
+        # for x in self.pdf_manifold.layers[1]:
+        #     x.shells = origin.shells
+        #     x.point_indices = origin.point_indices
+
 
         self.pdf_manifold.add_top_layer()
 
