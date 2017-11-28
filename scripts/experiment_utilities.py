@@ -1,9 +1,10 @@
 import numpy as np
+import math
 from param_dist import ParamDist
 import random
 from data_readers import ConfigReader, write_pgm
 from sklearn.neighbors import KDTree
-run_counter = 0
+from statistical_manifold import StatisticalManifold
 
 class PointSampler(object):
     def __init__(self, pdf):
@@ -88,174 +89,6 @@ class PointSampler(object):
 
 
 
-class StatisticalModel(object):
-    def __init__(self, manifold):
-        self.extract_model(manifold)
-
-    # def extract_model(self, manifold):
-    #     for
-
-
-
-class StatisticalManifold(object):
-    def __init__(self, indicator):
-        self.indicator = indicator
-        self.layers = []
-        self.top_layer = None
-        self.rollout = None
-
-
-    def add_layer(self, param_name, param_values, radius=0.0,
-                  percolation=0.5, shell_size=20):
-
-        # If we already have a layer, we will link points to new layer
-        points = None
-        if self.layers:
-            points = self.layers[-1]
-
-        # create points for new layer and the link them
-        layer = []
-        for i in param_values:
-            layer.append(
-                ParamDist(param_name, i, points=points, radius=radius,
-                          percolation=percolation, shell_size=shell_size))
-
-        self.connect_neighbors(layer)
-        self.layers.append(layer)
-
-    def add_top_layer(self, shell_size=20):
-        self.top_layer = \
-            ParamDist("Top", None, self.layers[-1], shell_size=shell_size)
-
-
-    def connect_neighbors(self, points):
-        prev = None
-        for point in points:
-            if prev:
-                prev.next = point
-            point.prev = prev
-            prev = point
-
-    def do_rollout(self, is_inverse=False):
-        self.rollout = []
-        self.top_layer.do_rollout(self.rollout, is_inverse)
-        global run_counter
-        run_counter += 1
-
-    def get_parameters(self, rollout):
-        params = {}
-        for _, point in rollout:
-            params[point.param_name] = \
-                point.param_value + random.uniform(-point.radius, point.radius)
-        return params
-
-
-    def choose_reward(self, visited_by):
-        total = 0
-        best = {}
-        for k,v in visited_by.items():
-            total += v
-            best[k] = total
-
-        pick = random.uniform(0, total)
-        for k,v in visited_by.items():
-            if pick <= best[k]:
-                return k
-
-
-
-
-
-    def do_backup(self, is_inverse=False):
-        params = self.get_parameters(self.rollout)
-        is_reward = self.indicator(params)
-        # if is_inverse:
-        #     is_reward = not is_reward
-
-        for parent, point in self.rollout:
-            success = True
-            if is_reward:
-                global run_counter
-                point.rewarded_by[parent] += 1
-                # reward_chance = sum(point.rewarded_by.values()) / point.visited
-                best = self.choose_reward(point.visited_by)
-                shell = best.point_indices[point]
-                best.point_indices[point] = shell.update_node(point, is_reward)
-                best = self.choose_reward(point.visited_by)
-                shell = best.point_indices[point]
-                best.point_indices[point] = shell.update_node(point, is_reward)
-                best = self.choose_reward(point.visited_by)
-                shell = best.point_indices[point]
-                best.point_indices[point] = shell.update_node(point, is_reward)
-
-
-            if not success:
-                continue
-            shell = parent.point_indices[point]
-            parent.point_indices[point] = shell.update_node(point, is_reward)
-            # ugly... ignore for now
-            if point.param_name == "Y":
-                for p in [parent.next, parent.prev]:
-
-                    if p:
-                        shell = p.point_indices[point]
-                        p.point_indices[point] = shell.update_node(point, is_reward)
-
-                        for p2 in [p.next, p.prev]:
-                            if p2:
-                                shell = p2.point_indices[point]
-                                p2.point_indices[point] = shell.update_node(point, is_reward)
-                                for p3 in [p2.next, p2.prev]:
-                                    if p3:
-                                        shell = p3.point_indices[point]
-                                        p3.point_indices[point] = shell.update_node(point, is_reward)
-
-                                        for p4 in [p3.next, p3.prev]:
-                                            if p4:
-                                                shell = p4.point_indices[point]
-                                                p4.point_indices[point] = shell.update_node(point, is_reward)
-
-
-
-    def train(self, ntimes):
-        for i in range(ntimes):
-            is_inverse = i % 2 == 0
-            self.do_rollout(is_inverse=is_inverse)
-            self.do_backup(is_inverse=is_inverse)
-
-    def evaluate_error(self, ntimes):
-        errors = 0
-        for i in range(ntimes):
-            self.do_rollout()
-            errors += not self.indicator(self.get_parameters(self.rollout))
-        return errors
-
-    def print_results(self, ntimes):
-        for i in range(ntimes):
-            self.do_rollout()
-            params = self.get_parameters(self.rollout)
-            output = ""
-            for k,v in sorted(params.items()):
-                if k == "Top":
-                    continue
-                output += "{}: {}\t".format(k,v)
-            print(output)
-
-
-    def estimate_frequencies(self, ntimes, height, width):
-        values = np.zeros((height, width))
-        for i in range(ntimes):
-            self.do_rollout()
-            params = self.get_parameters(self.rollout)
-            x,y = int(params["X"]), int(params["Y"])
-            try:
-                values[y][x] += 1
-            except IndexError:
-                continue
-
-        # values = values / values.sum()
-        return values
-
 
 
 class ExperimentRunner(object):
@@ -264,37 +97,100 @@ class ExperimentRunner(object):
 
         self.config = ConfigReader(config_path)
         self.factors, self.pdf = self.config.get_data()
+
         seed = int(self.config.get("Experiment", "SEED"))
         if seed != -1:
             random.seed(seed)
             np.random.seed(seed)
+
         samples = int(self.config.get("Density", "SAMPLES"))
         self.sampler = PointSampler(self.pdf)
         self.sampler.create_sample_data(samples)
         self.initialize_pdf_manifold()
 
     def run(self):
+        height, width = self.sampler.height, self.sampler.width
+        self.run_pdf_manifold(height, width)
+        self.run_observer_manifold(height, width)
+
+
+
+    def run_pdf_manifold(self, height, width):
         train_runs = int(self.config.get("Experiment", "TRAIN_RUNS"))
         self.pdf_manifold.train(train_runs)
-        # self.pdf_manifold.print_results(100)
-        height, width = self.sampler.height, self.sampler.width
+
         values = self.pdf_manifold.estimate_frequencies(
             50000, height, width)
 
-        # values = values / values.max()
-        # self.sampler.write_pdf("test_pdf.pgm")
-        values *= 30
-        # values = (values * 255).astype(np.uint8)
+        values = values / values.max()
+        self.sampler.write_pdf("test_pdf.pgm")
+        # values *= 30
+        values = (values * 255).astype(np.uint8)
         write_pgm("manifold_estimate.pgm", values)
+
+        # d1 = self.factors["f5"].distribution
+        # d2 = self.factors["f6"].distribution
+        # dfinal = (d2 * 0.5 + d1 * 0.5)**2
+        # dfinal /= dfinal.sum()
+        # f1_acc = self.get_feature_accessor(dfinal)
+        # self_exp = self.get_self_expectation(dfinal)
+        # # print(math.log(abs(self.pdf_manifold.get_expectation(f1_acc) / self_exp)))
+        # print((abs(self.pdf_manifold.get_expectation(f1_acc) * self_exp)))
+        #
+        # d1 = self.factors["f5"].distribution
+        # d2 = self.factors["f6"].distribution
+        # dfinal = (d2 * 0.65 + d1 * 0.35)**2
+        # dfinal /= dfinal.sum()
+        # f1_acc = self.get_feature_accessor(dfinal)
+        # self_exp = self.get_self_expectation(dfinal)
+        # print(abs(self.pdf_manifold.get_expectation(f1_acc) * self_exp))
+
+
+
+    def run_observer_manifold(self, height, width):
+            self.pdf_manifold.create_trajectory(2000)
+
+            self.initialize_observer_manifold(self.factors["f5"].values,
+                                          self.factors["f6"].values)
+            self.observer_manifold.train(5000)
+
+            # self.observer_manifold.create_trajectory(1000)
+            # factor1 = self.factors["f5"].values
+            # factor2 = self.factors["f6"].values
+            # values = np.zeros(factor1.shape)
+            # for params in self.observer_manifold.trajectory:
+            #     mixture = factor1 * params["X"] + factor2 * params["Y"]
+            #     mixture = mixture / max(0.001, mixture.sum())
+            #     values += mixture
+            #     accessor = self.get_feature_accessor(mixture)
+            #     res = self.pdf_manifold.get_expectation(accessor)
+
+
+            values = self.observer_manifold.estimate_frequencies(
+                50000, height, width)
+
+            values = values / values.max()
+            values = (values * 255).astype(np.uint8)
+            self.observer_manifold.print_center()
+            self.observer_manifold.print_results(10)
+            write_pgm("observer_manifold_estimate.pgm", values)
+
+
+
+
 
     def initialize_pdf_manifold(self):
         height, width = self.sampler.height, self.sampler.width
         interval = float(self.config.get("Experiment", "INTERVAL"))
         point_radius = float(self.config.get("Experiment", "POINT_RADIUS"))
         percolation = float(self.config.get("Experiment", "PERCOLATION"))
+        spread = int(self.config.get("Experiment", "SPREAD"))
         indicator = self.get_indicator()
+        # indicator = lambda p: (p["Y"] <= 120) or (p["X"] <= 160)
+        # indicator = lambda p: True
+        # indicator = lambda p: 180 <= math.sqrt(p["X"]**2 + p["Y"]**2) <= 200 or (150 < p["X"] < 300)
 
-        self.pdf_manifold = StatisticalManifold(indicator)
+        self.pdf_manifold = StatisticalManifold(indicator, spread=spread)
 
         xs = self.get_interval_values(interval, width)
         ys = self.get_interval_values(interval, height)
@@ -304,14 +200,48 @@ class ExperimentRunner(object):
 
         self.pdf_manifold.add_layer(
             "X", xs, radius=point_radius, percolation=percolation)
-
-        # origin = self.pdf_manifold.layers[1][0]
-        # for x in self.pdf_manifold.layers[1]:
-        #     x.shells = origin.shells
-        #     x.point_indices = origin.point_indices
-
-
         self.pdf_manifold.add_top_layer()
+
+    def initialize_observer_manifold(self, factor1, factor2):
+        height, width = self.sampler.height, self.sampler.width
+        interval = float(self.config.get("Experiment", "INTERVAL"))
+        point_radius = float(self.config.get("Experiment", "POINT_RADIUS"))
+        percolation = float(self.config.get("Experiment", "PERCOLATION"))
+        spread = int(self.config.get("Experiment", "SPREAD"))
+        highest = 0
+        total = 0
+        nsamples = 0
+
+        def evaluate_mixture(params):
+            nonlocal total, nsamples
+            mixture = factor1 * params["X"] + (factor2 * params["Y"])
+            mixture = mixture / mixture.sum()
+            accessor = self.get_feature_accessor(mixture)
+            expect = self.pdf_manifold.get_expectation(accessor)
+            res = abs((expect - self.get_self_expectation(mixture))) / self.get_self_expectation(mixture)
+            # res = expect
+            if nsamples == 0:
+                total = res
+                nsamples += 1
+                return True
+
+            if random.random() <= ((total / nsamples) / res)**5:
+                total += res
+                nsamples += 1
+                return True
+
+            return False
+
+        self.observer_manifold = StatisticalManifold(evaluate_mixture, spread=20)
+        xs = self.get_interval_values(200, width)
+        ys = self.get_interval_values(200, height)
+
+        self.observer_manifold.add_layer(
+            "Y", ys, radius=height / 300, percolation=percolation)
+
+        self.observer_manifold.add_layer(
+            "X", xs, radius=width / 300, percolation=percolation)
+        self.observer_manifold.add_top_layer()
 
 
     def get_interval_values(self, interval, length):
@@ -324,14 +254,30 @@ class ExperimentRunner(object):
     def get_indicator(self):
         reward_radius = float(self.config.get("Experiment", "REWARD_RADIUS"))
         sampler = self.sampler
+        total = 0
+        nsamples = 0
 
         def indicator(params):
+            nonlocal total, nsamples
             point = (params["X"], params["Y"])
-            return sampler.query(point, reward_radius)[0] > 0
+            neighbors = sampler.query(point, reward_radius)[0]
+            if random.random() <= (neighbors / (max(total, 1) / max(nsamples, 1)))**1.5:
+                nsamples += 1
+                total += neighbors
+                return True
+            return False
+            # highest = max(highest, neighbors)
+            # return random.random() <= (neighbors / highest)**2
 
         return indicator
 
+    def get_feature_accessor(self, feature):
+        def accessor(params):
+            return feature[params["Y"]][params["X"]]
+        return accessor
 
+    def get_self_expectation(self, feature):
+        return (feature**2).sum()
 
 
 

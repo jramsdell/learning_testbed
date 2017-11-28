@@ -35,12 +35,13 @@ class Factor(object):
 
         # Inverting values so black pixels are highest
         # Currently making higher values matter more
-        self.values = (255 - values.astype(float))
-        lesser = self.values[self.values < 150]
-        self.values = self.values**2 / self.values.max()**2
+        self.values = (255 - values.astype(float)) + 1
+        self.values = self.values / self.values.max()
         # self.values[self.values < 150] = lesser / lesser.max()**2
         # self.values = values.astype(float)
-        self.values = (self.values - self.values.min()) / self.values.max()
+        # self.values = (self.values - self.values.min()) / self.values.max()
+        # self.values **= 2
+        # self.values = self.values / self.values.sum()
 
         # distribution is normalized version of pixel values
         self.distribution = self.values / self.values.sum()

@@ -32,16 +32,6 @@ class Shell(object):
         self.nodes.append(node)
         self.node_indices[node] = len(self.nodes) - 1
 
-    # def update_node(self, node, shells):
-    #     if node.energy < self.min_energy:
-    #         node.level -= 1
-    #         self.nodes.remove(node)
-    #         shells[node.level].nodes.append(node)
-    #     elif node.energy > self.max_energy:
-    #         node.level += 1
-    #         self.nodes.remove(node)
-    #         shells[node.level].nodes.append(node)
-
     def update_node(self, node, is_reward):
         # success = random.random() <= 1 / self.weight
         success = random.random() <= self.chance
@@ -77,6 +67,8 @@ class ParamDist(object):
         self.param_value = param_value
         self.visited = 0
         self.visited_by = Counter()
+        self.spread_by = Counter()
+        self.spread = 0
         self.rewarded_by = Counter()
         if points and shell_size:
             center_shell = self.shells[shell_size]
@@ -113,10 +105,11 @@ class ParamDist(object):
                 return point.percolate()
 
 
-    def do_rollout(self, rollout, is_inverse=False):
+    def do_rollout(self, rollout, is_inverse=False, record=True):
         point = self.pull_from_dist(is_inverse)
-        point.visited += 1
-        point.visited_by[self] += 1
+        if record:
+            point.visited += 1
+            point.visited_by[self] += 1
         result = [self, point]
         # history[result[0].param_name] = result
         rollout.append(result)
@@ -136,14 +129,9 @@ class ParamDist(object):
 
 
     def construct_shells(self, steps):
-        # energy_step = [2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
-        # energy_step = [(2 ** (x + 1)) for x in range(steps)]
+        # energy_step = [(1.25 ** (x + 1)) for x in range(steps)]
         energy_step = [(2 * (x + 1)) for x in range(steps)]
         for idx, i in enumerate(energy_step[::-1]):
-            # weight = 1/(idx * 4 + 2)
-            # weight = 1/i**3
-            # weight = 1/i
-            # weight = 1/(idx + 1)
             weight = 1/i
             chance = 1/i
             self.shells.append(Shell(weight, chance))
@@ -151,11 +139,7 @@ class ParamDist(object):
         self.shells.append(Shell(1, 0.5))
 
         for idx,i in enumerate(energy_step):
-            # weight = idx * 4 + 1
-            # weight = i + 1
-            # weight = (idx + 1) * 2
-            weight = i + 1
-            # chance = i + 1
+            weight = i
             chance = 1/i
             self.shells.append(Shell(weight, chance))
 
@@ -199,72 +183,4 @@ def update_distributions(rollout, is_reward):
     for parent, point in rollout:
         shell = parent.point_indices[point]
         parent.point_indices[point] = shell.update_node(point, is_reward)
-
-if __name__ == '__main__':
-    ys = []
-    for i in range(100):
-        ys.append(ParamDist("Y", i + 1, None, 0.5, percolation=0.95))
-    connect_neighbors(ys)
-
-    xs = []
-    for i in range(100):
-        xs.append(ParamDist("X", i + 1, ys, percolation=0.95))
-    connect_neighbors(xs)
-
-    multi_dist = ParamDist("", 0, xs)
-    # history = []
-    indicator = lambda p: (10 <= (p["X"] + p["Y"]) <= 40) or ((65 <= (p["X"] + p["Y"]) <= 100))
-    for i in range(1000):
-        rollout = []
-        multi_dist.do_rollout(rollout)
-        params = get_parameters(rollout)
-        success = indicator(params)
-        update_distributions(rollout, success)
-
-    errors = 0
-    for i in range(100):
-        rollout = []
-        multi_dist.do_rollout(rollout)
-        params = get_parameters(rollout)
-        errors += not indicator(params)
-
-        # for x in rollout:
-        #     for i in x[1].visited_by.most_common(1):
-        #         print("{}: {}".format(i[0].param_value, i[1] / x[1].visited))
-            # invf = x[1].get_inverse_freq()
-            # for k,v in sorted(invf.items(), key=lambda x: x[1]):
-            #     print(k,v)
-
-
-
-    # p = ParamDist([i + 1 for i in range(100)], "X", 1.0)
-    # # p.child = ParamDist([(i + 1)**2 for i in range(10)], "Y", 0.5)
-    # p.child = ParamDist([i + 1 for i in range(100)], "Y", 0.5)
-    # indicator = lambda x,y: (30 <= x + y <= 45) or (y >= 80)
-
-    # for i in range(100000):
-    #     results = []
-    #     p.do_rollout(results)
-    #
-    #     x = results[0][1]
-    #     y = results[1][1]
-    #     is_reward = indicator(x, y)
-    #
-    #     for result in results[::-1]:
-    #         _, _, index, shell = result
-    #         shell.update_node(index, is_reward)
-    #
-    # error = 0
-    # for i in range(100):
-    #     results = p.do_rollout([])
-    #     x = results[0][1]
-    #     y = results[1][1]
-    #     comb = x + y
-    #     print("{}, {}, {}".format(x, y, x + y))
-    #     if not indicator(x,y):
-    #         error += 1
-    #
-    # # p.print_shells()
-    # # p.child.print_shells()
-    # print("Error: {}".format(error))
 
