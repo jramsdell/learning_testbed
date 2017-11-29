@@ -37,18 +37,12 @@ class Factor(object):
         # Currently making higher values matter more
         self.values = (255 - values.astype(float)) + 1
         self.values = self.values / self.values.max()
-        # self.values[self.values < 150] = lesser / lesser.max()**2
-        # self.values = values.astype(float)
-        # self.values = (self.values - self.values.min()) / self.values.max()
-        # self.values **= 2
-        # self.values = self.values / self.values.sum()
 
         # distribution is normalized version of pixel values
         self.distribution = self.values / self.values.sum()
 
     def update_distribution(self):
         self.distribution = self.values / self.values.sum()
-
 
 
 def create_factor(filename):
@@ -89,8 +83,3 @@ def write_pgm(filename, values):
         for v in values:
             for c in v:
                 f.write(str(int(c)) + "\n")
-
-
-
-if __name__ == '__main__':
-    result = create_factor("/home/hcgs/ai/learning_testbed/resources/factor_shitty_circle.pgm")

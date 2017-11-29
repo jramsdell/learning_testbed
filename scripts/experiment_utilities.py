@@ -36,32 +36,17 @@ class PointSampler(object):
         self.write_pgm_samples(samples, "samples_used.pgm")
         self.tree = KDTree(samples)
 
-    def write_sample_data(self, samples, filename):
-        with open(filename, "w") as f:
-            for sample in samples:
-                f.write("{} {}\n".format(*sample))
-
-
-    def load_sample_data(self, filename):
-        samples = []
-        with open(filename) as f:
-            for line in f:
-                x,y = line.split()
-                samples.append((int(x), int(y)))
-        return samples
-
-
     def write_pgm_samples(self, samples, filename):
         values = np.zeros((self.height, self.width), dtype=np.uint8)
         for sample in samples:
-            values[sample[1]][sample[0]] = 255
+            values[sample[1]][sample[0]] += 1
+        values = values / values.max()
+        values = (values * 255).astype(np.uint8)
 
         with open(filename, "w") as f:
             f.write("P2\n{} {}\n255\n".format(self.width, self.height))
             for i in np.nditer(values):
                 f.write("{}\n".format(i))
-
-
 
     def query(self, point, radius):
         """
@@ -80,15 +65,14 @@ class PointSampler(object):
         samples = self.sample(nsamples)
         values = np.zeros((self.height, self.width), dtype=np.uint8)
         for sample in samples:
-            values[sample[1]][sample[0]] = min(250, values[sample[1]][sample[0]] + 25)
+            values[sample[1]][sample[0]] += 1
+        values = values / values.max()
+        values = (values * 255).astype(np.uint8)
 
         with open(filename, "w") as f:
             f.write("P2\n{} {}\n255\n".format(self.width, self.height))
             for i in np.nditer(values):
                 f.write("{}\n".format(i))
-
-
-
 
 
 class ExperimentRunner(object):
@@ -113,8 +97,6 @@ class ExperimentRunner(object):
         self.run_pdf_manifold(height, width)
         self.run_observer_manifold(height, width)
 
-
-
     def run_pdf_manifold(self, height, width):
         train_runs = int(self.config.get("Experiment", "TRAIN_RUNS"))
         self.pdf_manifold.train(train_runs)
@@ -124,47 +106,16 @@ class ExperimentRunner(object):
 
         values = values / values.max()
         self.sampler.write_pdf("test_pdf.pgm")
-        # values *= 30
         values = (values * 255).astype(np.uint8)
         write_pgm("manifold_estimate.pgm", values)
 
-        # d1 = self.factors["f5"].distribution
-        # d2 = self.factors["f6"].distribution
-        # dfinal = (d2 * 0.5 + d1 * 0.5)**2
-        # dfinal /= dfinal.sum()
-        # f1_acc = self.get_feature_accessor(dfinal)
-        # self_exp = self.get_self_expectation(dfinal)
-        # # print(math.log(abs(self.pdf_manifold.get_expectation(f1_acc) / self_exp)))
-        # print((abs(self.pdf_manifold.get_expectation(f1_acc) * self_exp)))
-        #
-        # d1 = self.factors["f5"].distribution
-        # d2 = self.factors["f6"].distribution
-        # dfinal = (d2 * 0.65 + d1 * 0.35)**2
-        # dfinal /= dfinal.sum()
-        # f1_acc = self.get_feature_accessor(dfinal)
-        # self_exp = self.get_self_expectation(dfinal)
-        # print(abs(self.pdf_manifold.get_expectation(f1_acc) * self_exp))
-
-
-
     def run_observer_manifold(self, height, width):
-            self.pdf_manifold.create_trajectory(2000)
+            self.pdf_manifold.create_trajectory(5000)
+            self.pdf_manifold.store_variance()
 
-            self.initialize_observer_manifold(self.factors["f5"].values,
-                                          self.factors["f6"].values)
-            self.observer_manifold.train(5000)
-
-            # self.observer_manifold.create_trajectory(1000)
-            # factor1 = self.factors["f5"].values
-            # factor2 = self.factors["f6"].values
-            # values = np.zeros(factor1.shape)
-            # for params in self.observer_manifold.trajectory:
-            #     mixture = factor1 * params["X"] + factor2 * params["Y"]
-            #     mixture = mixture / max(0.001, mixture.sum())
-            #     values += mixture
-            #     accessor = self.get_feature_accessor(mixture)
-            #     res = self.pdf_manifold.get_expectation(accessor)
-
+            self.initialize_observer_manifold(self.factors["f5"].distribution,
+                                          self.factors["f6"].distribution)
+            self.observer_manifold.train(100)
 
             values = self.observer_manifold.estimate_frequencies(
                 50000, height, width)
@@ -174,10 +125,6 @@ class ExperimentRunner(object):
             self.observer_manifold.print_center()
             self.observer_manifold.print_results(10)
             write_pgm("observer_manifold_estimate.pgm", values)
-
-
-
-
 
     def initialize_pdf_manifold(self):
         height, width = self.sampler.height, self.sampler.width
@@ -204,47 +151,47 @@ class ExperimentRunner(object):
 
     def initialize_observer_manifold(self, factor1, factor2):
         height, width = self.sampler.height, self.sampler.width
-        interval = float(self.config.get("Experiment", "INTERVAL"))
-        point_radius = float(self.config.get("Experiment", "POINT_RADIUS"))
         percolation = float(self.config.get("Experiment", "PERCOLATION"))
-        spread = int(self.config.get("Experiment", "SPREAD"))
-        highest = 0
         total = 0
-        nsamples = 0
+        nsamples = [0 for i in range(50)]
 
         def evaluate_mixture(params):
-            nonlocal total, nsamples
-            mixture = factor1 * params["X"] + (factor2 * params["Y"])
+            nonlocal total, nsamples, height, width
+            mixture = factor1 * params["X"] + factor2 * params["Y"]
             mixture = mixture / mixture.sum()
-            accessor = self.get_feature_accessor(mixture)
-            expect = self.pdf_manifold.get_expectation(accessor)
-            res = abs((expect - self.get_self_expectation(mixture))) / self.get_self_expectation(mixture)
-            # res = expect
-            if nsamples == 0:
-                total = res
-                nsamples += 1
+
+            res = abs(self.pdf_manifold.get_covariance(mixture))
+
+            if not nsamples:
+                nsamples[0] = res
+                total = 1
                 return True
 
-            if random.random() <= ((total / nsamples) / res)**5:
-                total += res
-                nsamples += 1
-                return True
+            mean = sum(nsamples) / len(nsamples)
+            biggest_diff = 0
+            for sample in nsamples:
+                biggest_diff = max(biggest_diff, sample - mean)
 
+            if random.random() <= ((res - mean) / biggest_diff):
+                print(res)
+                total += 1
+                nsamples[total % 50] = res
+                return True
             return False
 
-        self.observer_manifold = StatisticalManifold(evaluate_mixture, spread=20)
+        self.observer_manifold = StatisticalManifold(evaluate_mixture, spread=5,
+                                                     is_exponential=True)
         xs = self.get_interval_values(200, width)
         ys = self.get_interval_values(200, height)
 
         self.observer_manifold.add_layer(
-            "Y", ys, radius=height / 300, percolation=percolation)
-
+            "Y", ys, radius=height / 200, percolation=percolation)
         self.observer_manifold.add_layer(
-            "X", xs, radius=width / 300, percolation=percolation)
+            "X", xs, radius=width / 200, percolation=percolation)
         self.observer_manifold.add_top_layer()
 
-
-    def get_interval_values(self, interval, length):
+    @staticmethod
+    def get_interval_values(interval, length):
         values = []
         istep = length / interval
         for step in range(int(interval)):
@@ -253,6 +200,7 @@ class ExperimentRunner(object):
 
     def get_indicator(self):
         reward_radius = float(self.config.get("Experiment", "REWARD_RADIUS"))
+        overlap_bias = float(self.config.get("Experiment", "OVERLAP_BIAS"))
         sampler = self.sampler
         total = 0
         nsamples = 0
@@ -261,38 +209,30 @@ class ExperimentRunner(object):
             nonlocal total, nsamples
             point = (params["X"], params["Y"])
             neighbors = sampler.query(point, reward_radius)[0]
-            if random.random() <= (neighbors / (max(total, 1) / max(nsamples, 1)))**1.5:
+            ratio = neighbors / (max(total, 1) / max(nsamples, 1))
+            if random.random() <= ratio ** overlap_bias:
                 nsamples += 1
                 total += neighbors
                 return True
             return False
-            # highest = max(highest, neighbors)
-            # return random.random() <= (neighbors / highest)**2
 
         return indicator
 
-    def get_feature_accessor(self, feature):
+    @staticmethod
+    def get_feature_accessor(feature):
         def accessor(params):
             return feature[params["Y"]][params["X"]]
         return accessor
 
-    def get_self_expectation(self, feature):
+    @staticmethod
+    def get_self_expectation(feature):
         return (feature**2).sum()
 
 
 
 
-if __name__ == '__main__':
-    m = StatisticalManifold(lambda x: (10 <= x["Y"] + x["X"] <= 12) )
-    m.add_layer("Y", range(1, 100), percolation=0.0)
-    m.add_layer("X", range(1, 100), percolation=0.0)
-    m.add_top_layer()
-    m.train(10000)
-    # m.print_results(20)
-    # errors = m.evaluate_error(1000)
-    # print(errors)
-    # print(m.get_parameters(m.rollout))
 
+if __name__ == '__main__':
     e = ExperimentRunner("/home/hcgs/ai/learning_testbed/configurations/config.cfg")
     e.run()
 

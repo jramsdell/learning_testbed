@@ -2,26 +2,23 @@ import random
 import numpy as np
 from param_dist import ParamDist
 
-class StatisticalModel(object):
-    def __init__(self, manifold):
-        self.extract_model(manifold)
-
-        # def extract_model(self, manifold):
-        #     for
-
-
-
 class StatisticalManifold(object):
-    def __init__(self, indicator, spread=0):
+    """
+    The StatisticalManifold contains points that are parameters.
+    These points have distributions over other points, and so forth.
+    This results in a mixture distribution.
+    """
+    def __init__(self, indicator, spread=0, is_exponential=False):
         self.indicator = indicator
         self.layers = []
         self.top_layer = None
         self.rollout = None
         self.spread = spread
         self.backups = 0
+        self.is_exponential = is_exponential
         self.rewards = 0
         self.trajectory = []
-
+        self.variance = None
 
     def add_layer(self, param_name, param_values, radius=0.0,
                   percolation=0.5, shell_size=20):
@@ -36,7 +33,8 @@ class StatisticalManifold(object):
         for i in param_values:
             layer.append(
                 ParamDist(param_name, i, points=points, radius=radius,
-                          percolation=percolation, shell_size=shell_size))
+                          percolation=percolation, shell_size=shell_size,
+                          is_exponential=self.is_exponential))
 
         self.connect_neighbors(layer)
         self.layers.append(layer)
@@ -45,8 +43,8 @@ class StatisticalManifold(object):
         self.top_layer = \
             ParamDist("Top", None, self.layers[-1], shell_size=shell_size)
 
-
-    def connect_neighbors(self, points):
+    @staticmethod
+    def connect_neighbors(points):
         prev = None
         for point in points:
             if prev:
@@ -54,19 +52,20 @@ class StatisticalManifold(object):
             point.prev = prev
             prev = point
 
-    def do_rollout(self, is_inverse=False, record=True):
+    def do_rollout(self, is_exploration=False, record=True):
         self.rollout = []
-        self.top_layer.do_rollout(self.rollout, is_inverse, record=record)
+        self.top_layer.do_rollout(self.rollout, is_exploration, record=record)
 
-    def get_parameters(self, rollout):
+    @staticmethod
+    def get_parameters(rollout):
         params = {}
         for _, point in rollout:
             params[point.param_name] = \
                 point.param_value + random.uniform(-point.radius, point.radius)
         return params
 
-
-    def choose_reward(self, visited_by):
+    @staticmethod
+    def choose_reward(visited_by):
         total = 0
         best = {}
         for k,v in visited_by.items():
@@ -78,17 +77,11 @@ class StatisticalManifold(object):
             if pick <= best[k]:
                 return k
 
-
-
-
-
-    def do_backup(self, is_inverse=False):
+    def do_backup(self):
         self.backups += 1
         params = self.get_parameters(self.rollout)
         is_reward = self.indicator(params)
         self.rewards += is_reward
-        # if is_inverse:
-        #     is_reward = not is_reward
 
         for parent, point in self.rollout:
             if is_reward:
@@ -99,9 +92,6 @@ class StatisticalManifold(object):
                     point.spread_by[best] += 1
                     shell = best.point_indices[point]
                     best.point_indices[point] = shell.update_node(point, is_reward)
-                    # point.rewarded_by[best] += 1
-                    # point.visited += 1
-
 
             shell = parent.point_indices[point]
             parent.point_indices[point] = shell.update_node(point, is_reward)
@@ -127,15 +117,12 @@ class StatisticalManifold(object):
                                                 shell = p4.point_indices[point]
                                                 p4.point_indices[point] = shell.update_node(point, is_reward)
 
-
-
     def train(self, ntimes):
         for i in range(ntimes):
-            is_inverse = i % 2 == 0
+            is_inverse = (i % 2 == 0) and not self.is_exponential
             # is_inverse = False
-            self.do_rollout(is_inverse=is_inverse)
-            self.do_backup(is_inverse=is_inverse)
-
+            self.do_rollout(is_exploration=is_inverse)
+            self.do_backup()
 
     def print_center(self):
         total = None
@@ -157,6 +144,7 @@ class StatisticalManifold(object):
 
     def create_trajectory(self, ntimes):
         self.trajectory = []
+
         for i in range(ntimes):
             self.do_rollout(record=False)
             params = self.get_parameters(self.rollout)
@@ -172,13 +160,36 @@ class StatisticalManifold(object):
             params["X"] = int(params["X"])
             self.trajectory.append(params)
 
+    def store_variance(self):
+        values = np.zeros((240, 240))
+        self.variance = []
+        for params in self.trajectory:
+            values[params["Y"]][params["X"]] += 1
+        values = values / values.sum()
+        # mean = np.mean(values)
+        self.variance = values
+
+        # for params in self.trajectory:
+        #     self.variance.append(values[params["Y"]][params["X"]] - mean)
 
     def get_expectation(self, function):
         total = 0
         for params in self.trajectory:
             total += function(params)
-        return total / len(self.trajectory)
+        total /= len(self.trajectory)
+        return total
 
+    def get_covariance(self, function):
+        fmean = np.mean(function)
+        fstd = np.std(function)
+        vmean = np.mean(self.variance)
+        vstd = np.std(self.variance)
+        total = 0
+        for params in self.trajectory:
+            v1 = self.variance[params["Y"]][params["X"]] - vmean
+            v2 = function[params["Y"]][params["X"]] - fmean
+            total += v1 * v2
+        return (total / (len(self.trajectory) - 1)) / (fstd * vstd)
 
     def evaluate_error(self, ntimes):
         errors = 0
@@ -198,7 +209,6 @@ class StatisticalManifold(object):
                 output += "{}: {}\t".format(k,v)
             print(output)
 
-
     def estimate_frequencies(self, ntimes, height, width):
         values = np.zeros((height, width))
         for i in range(ntimes):
@@ -212,7 +222,3 @@ class StatisticalManifold(object):
 
         # values = values / values.sum()
         return values
-
-
-
-
