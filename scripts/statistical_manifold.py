@@ -1,4 +1,6 @@
 import random
+import math
+from collections import defaultdict
 import numpy as np
 from param_dist import ParamDist
 
@@ -8,10 +10,11 @@ class StatisticalManifold(object):
     These points have distributions over other points, and so forth.
     This results in a mixture distribution.
     """
-    def __init__(self, indicator, spread=0, is_exponential=False):
+    def __init__(self, indicator, spread=0, is_exponential=False, is_multipull=False):
         self.indicator = indicator
         self.layers = []
         self.top_layer = None
+        self.is_multipull = is_multipull
         self.rollout = None
         self.spread = spread
         self.backups = 0
@@ -54,14 +57,29 @@ class StatisticalManifold(object):
 
     def do_rollout(self, is_exploration=False, record=True):
         self.rollout = []
-        self.top_layer.do_rollout(self.rollout, is_exploration, record=record)
+        if self.is_multipull:
+            for i in range(2):
+                temp_rollout = []
+                self.top_layer.do_rollout(temp_rollout, is_exploration, record=record)
+                self.rollout.append(temp_rollout)
+        else:
+            self.top_layer.do_rollout(self.rollout, is_exploration, record=record)
 
-    @staticmethod
-    def get_parameters(rollout):
-        params = {}
-        for _, point in rollout:
-            params[point.param_name] = \
-                point.param_value + random.uniform(-point.radius, point.radius)
+    # @staticmethod
+    def get_parameters(self, rollout):
+        params = defaultdict(float)
+        if self.is_multipull:
+            for sample in rollout:
+                for _, point in sample:
+                    params[point.param_name] += \
+                        point.param_value + random.uniform(-point.radius, point.radius)
+            for k,v in params.items():
+                params[k] = v / len(rollout)
+
+        else:
+            for _, point in rollout:
+                params[point.param_name] = \
+                    point.param_value + random.uniform(-point.radius, point.radius)
         return params
 
     @staticmethod
@@ -77,13 +95,8 @@ class StatisticalManifold(object):
             if pick <= best[k]:
                 return k
 
-    def do_backup(self):
-        self.backups += 1
-        params = self.get_parameters(self.rollout)
-        is_reward = self.indicator(params)
-        self.rewards += is_reward
-
-        for parent, point in self.rollout:
+    def propagate(self, rollout, is_reward):
+        for parent, point in rollout:
             if is_reward:
                 point.rewarded_by[parent] += 1
 
@@ -117,12 +130,52 @@ class StatisticalManifold(object):
                                                 shell = p4.point_indices[point]
                                                 p4.point_indices[point] = shell.update_node(point, is_reward)
 
+    def do_backup(self):
+        self.backups += 1
+        params = self.get_parameters(self.rollout)
+        is_reward = self.indicator(params)
+        self.rewards += is_reward
+        if self.is_multipull:
+            for i in self.rollout:
+                self.propagate(i, is_reward)
+        else:
+            self.propagate(self.rollout, is_reward)
+
+
     def train(self, ntimes):
         for i in range(ntimes):
             is_inverse = (i % 2 == 0) and not self.is_exponential
-            # is_inverse = False
             self.do_rollout(is_exploration=is_inverse)
             self.do_backup()
+
+    def bootstrap(self, examples):
+        for example in examples:
+            runs = []
+            total = 0
+            cumulant = []
+            for i in range(5):
+                self.do_rollout()
+                runs.append(self.rollout)
+                params = self.get_parameters(self.rollout)
+                x, y = params["X"], params["Y"]
+                dist = math.sqrt((example[0] - x)**2 + (example[1] - y)**2)
+                total += 1/max(dist, 0.00000001)
+                cumulant.append(total)
+
+            indices = []
+            for i in range(5):
+                pick = random.uniform(0, total)
+                for idx, mass in enumerate(cumulant):
+                    if pick <= mass:
+                        indices.append(idx)
+                        break
+
+            for index in indices:
+                self.rollout = runs[index]
+                self.do_backup()
+
+
+
 
     def print_center(self):
         total = None

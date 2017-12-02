@@ -1,4 +1,5 @@
 import numpy as np
+from operator import itemgetter
 import math
 from param_dist import ParamDist
 import random
@@ -115,15 +116,15 @@ class ExperimentRunner(object):
 
             self.initialize_observer_manifold(self.factors["f5"].distribution,
                                           self.factors["f6"].distribution)
-            self.observer_manifold.train(100)
+            self.observer_manifold.train(2000)
 
             values = self.observer_manifold.estimate_frequencies(
                 50000, height, width)
 
             values = values / values.max()
             values = (values * 255).astype(np.uint8)
-            self.observer_manifold.print_center()
-            self.observer_manifold.print_results(10)
+            # self.observer_manifold.print_center()
+            # self.observer_manifold.print_results(10)
             write_pgm("observer_manifold_estimate.pgm", values)
 
     def initialize_pdf_manifold(self):
@@ -173,7 +174,7 @@ class ExperimentRunner(object):
                 biggest_diff = max(biggest_diff, sample - mean)
 
             if random.random() <= ((res - mean) / biggest_diff):
-                print(res)
+                print("{}: ({}, {})".format(res, params["X"], params["Y"]))
                 total += 1
                 nsamples[total % 50] = res
                 return True
@@ -185,9 +186,9 @@ class ExperimentRunner(object):
         ys = self.get_interval_values(200, height)
 
         self.observer_manifold.add_layer(
-            "Y", ys, radius=height / 200, percolation=percolation)
+            "Y", ys, radius=height / 200, percolation=0.5)
         self.observer_manifold.add_layer(
-            "X", xs, radius=width / 200, percolation=percolation)
+            "X", xs, radius=width / 200, percolation=0.5)
         self.observer_manifold.add_top_layer()
 
     @staticmethod
